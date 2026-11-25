@@ -63,6 +63,13 @@
             <version>${mybatis-plus.version}</version>
         </dependency>
 
+        <!-- 3.5.9 起分页插件依赖的 JSqlParser 被拆到独立模块，不加这个 PaginationInnerInterceptor 直接找不到类 -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-jsqlparser</artifactId>
+            <version>${mybatis-plus.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>

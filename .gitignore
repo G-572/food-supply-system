@@ -18,6 +18,3 @@ dist/
 # 系统
 .DS_Store
 Thumbs.db
-
-# 本地工作区数据，不是项目代码
-.workbuddy/

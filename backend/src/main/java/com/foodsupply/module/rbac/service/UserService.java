@@ -5,7 +5,9 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.foodsupply.common.BizException;
 import com.foodsupply.common.PageResult;
+import com.foodsupply.module.rbac.dto.UserAuditRequest;
 import com.foodsupply.module.rbac.dto.UserCreateRequest;
+import com.foodsupply.module.rbac.dto.UserRolesRequest;
 import com.foodsupply.module.rbac.dto.UserStatusRequest;
 import com.foodsupply.module.rbac.dto.UserUpdateRequest;
 import com.foodsupply.module.rbac.entity.SysRole;
@@ -31,8 +33,10 @@ import java.util.Set;
 public class UserService {
 
     private static final int MAX_PAGE_SIZE = 100;
+    private static final String STATUS_PENDING = "PENDING";
     private static final String STATUS_ACTIVE = "ACTIVE";
     private static final String STATUS_DISABLED = "DISABLED";
+    private static final String STATUS_REJECTED = "REJECTED";
     private static final String ROLE_ADMIN = "ADMIN";
     private static final String ROLE_SUPPLIER = "SUPPLIER";
 
@@ -121,6 +125,67 @@ public class UserService {
                 .eq(SysUser::getId, id)
                 .set(SysUser::getStatus, request.getStatus()));
         log.info("用户状态变更: id={}, status={}", id, request.getStatus());
+    }
+
+    /**
+     * 审核注册申请。通过时把默认的 SUPPLIER 换成申请的角色，
+     * 驳回则只改状态，角色不动（后续管理员可以再改）。
+     */
+    @Transactional
+    public void audit(Long id, UserAuditRequest request) {
+        SysUser user = requireUser(id);
+        if (!STATUS_PENDING.equals(user.getStatus())) {
+            throw BizException.conflict("该账号不在待审核状态");
+        }
+
+        if (!Boolean.TRUE.equals(request.getApproved())) {
+            userMapper.update(null, Wrappers.<SysUser>lambdaUpdate()
+                    .eq(SysUser::getId, id)
+                    .set(SysUser::getStatus, STATUS_REJECTED));
+            log.info("注册申请被驳回: id={}, 原因={}", id, request.getReason());
+            return;
+        }
+
+        String roleCode = StringUtils.hasText(request.getRoleCode())
+                ? request.getRoleCode() : user.getAppliedRole();
+        if (!StringUtils.hasText(roleCode)) {
+            throw BizException.badRequest("审核通过时必须指定角色");
+        }
+        List<SysRole> roles = resolveRoles(List.of(roleCode));
+        if (ROLE_SUPPLIER.equals(roleCode) && request.getSupplierId() == null) {
+            throw BizException.badRequest("通过供货商申请时需指定绑定的供货商");
+        }
+
+        // 注册时挂的是默认角色，这里全量替换成审核后的角色
+        userRoleMapper.delete(Wrappers.<SysUserRole>lambdaQuery().eq(SysUserRole::getUserId, id));
+        SysUserRole userRole = new SysUserRole();
+        userRole.setUserId(id);
+        userRole.setRoleId(roles.get(0).getId());
+        userRoleMapper.insert(userRole);
+
+        userMapper.update(null, Wrappers.<SysUser>lambdaUpdate()
+                .eq(SysUser::getId, id)
+                .set(SysUser::getStatus, STATUS_ACTIVE)
+                .set(SysUser::getAppliedRole, roleCode)
+                .set(SysUser::getSupplierId, request.getSupplierId()));
+
+        log.info("注册申请已通过: id={}, 角色={}", id, roleCode);
+    }
+
+    /** 全量覆盖用户角色。权限每次请求实时查库，所以改完立即生效，不用清缓存 */
+    @Transactional
+    public void assignRoles(Long id, UserRolesRequest request) {
+        requireUser(id);
+        List<SysRole> roles = resolveRoles(request.getRoleCodes());
+
+        userRoleMapper.delete(Wrappers.<SysUserRole>lambdaQuery().eq(SysUserRole::getUserId, id));
+        for (SysRole role : roles) {
+            SysUserRole userRole = new SysUserRole();
+            userRole.setUserId(id);
+            userRole.setRoleId(role.getId());
+            userRoleMapper.insert(userRole);
+        }
+        log.info("用户角色已调整: id={}, roles={}", id, request.getRoleCodes());
     }
 
     private SysUser requireUser(Long id) {

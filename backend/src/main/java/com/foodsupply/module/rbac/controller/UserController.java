@@ -2,7 +2,9 @@ package com.foodsupply.module.rbac.controller;
 
 import com.foodsupply.common.PageResult;
 import com.foodsupply.common.Result;
+import com.foodsupply.module.rbac.dto.UserAuditRequest;
 import com.foodsupply.module.rbac.dto.UserCreateRequest;
+import com.foodsupply.module.rbac.dto.UserRolesRequest;
 import com.foodsupply.module.rbac.dto.UserStatusRequest;
 import com.foodsupply.module.rbac.dto.UserUpdateRequest;
 import com.foodsupply.module.rbac.service.UserService;
@@ -58,5 +60,19 @@ public class UserController {
     public Result<Void> changeStatus(@PathVariable Long id, @Valid @RequestBody UserStatusRequest request) {
         userService.changeStatus(id, request, currentUser.id());
         return Result.ok("状态已更新", null);
+    }
+
+    @PostMapping("/{id}/audit")
+    @PreAuthorize("hasAuthority('user:audit')")
+    public Result<Void> audit(@PathVariable Long id, @Valid @RequestBody UserAuditRequest request) {
+        userService.audit(id, request);
+        return Result.ok(Boolean.TRUE.equals(request.getApproved()) ? "已通过审核" : "已驳回", null);
+    }
+
+    @PutMapping("/{id}/roles")
+    @PreAuthorize("hasAuthority('user:assign-role')")
+    public Result<Void> assignRoles(@PathVariable Long id, @Valid @RequestBody UserRolesRequest request) {
+        userService.assignRoles(id, request);
+        return Result.ok("角色已更新", null);
     }
 }

@@ -1,6 +1,11 @@
-# 复制本文件为 application-local.yml，填上自己的数据库密码再启动。
+# 复制本文件为 application-local.yml，填上自己的数据库密码和 JWT 密钥再启动。
 # application-local.yml 已在 .gitignore 里，不会被提交。
 spring:
   datasource:
     username: root
     password: 你的MySQL密码
+
+app:
+  jwt:
+    # 至少 32 字节，生成方式随意，例如 openssl rand -base64 48
+    secret: 换成你自己的密钥

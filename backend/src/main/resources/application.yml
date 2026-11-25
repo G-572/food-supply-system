@@ -22,3 +22,8 @@ mybatis-plus:
 logging:
   level:
     com.foodsupply: debug
+
+app:
+  jwt:
+    # 密钥放 application-local.yml，不提交
+    expire-minutes: 120

@@ -21,9 +21,10 @@ public class SecurityConfig {
                 .httpBasic(AbstractHttpConfigurer::disable)
                 .formLogin(AbstractHttpConfigurer::disable)
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                // TODO 阶段 4-D：JWT 过滤器接进来以后改成 authenticated()，
-                // 现在先全部放行，否则 health 自检和 Swagger 都会被拦
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+                // TODO 阶段 4-D：JWT 过滤器接进来以后，下面的 authenticated() 才真正生效
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/auth/login", "/api/auth/register", "/api/health").permitAll()
+                        .anyRequest().authenticated());
         return http.build();
     }
 

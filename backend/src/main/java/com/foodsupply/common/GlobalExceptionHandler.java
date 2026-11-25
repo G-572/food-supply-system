@@ -1,14 +1,21 @@
 package com.foodsupply.common;
 
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.validation.BindException;
+import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import java.util.stream.Collectors;
 
 /**
  * 全局异常处理。目标：任何异常都以统一格式返回，且绝不把堆栈直接吐给前端。
@@ -24,6 +31,33 @@ public class GlobalExceptionHandler {
         log.warn("业务异常: code={}, message={}", rc.getCode(), e.getMessage());
         return ResponseEntity.status(rc.getCode())
                 .body(Result.fail(rc.getCode(), e.getMessage()));
+    }
+
+    /** @RequestBody + @Valid 校验失败，把字段提示拼起来返回 */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<Result<Void>> handleMethodArgumentNotValid(MethodArgumentNotValidException e) {
+        String msg = e.getBindingResult().getFieldErrors().stream()
+                .map(FieldError::getDefaultMessage)
+                .collect(Collectors.joining("; "));
+        return badRequest(msg);
+    }
+
+    /** 表单绑定校验失败 */
+    @ExceptionHandler(BindException.class)
+    public ResponseEntity<Result<Void>> handleBindException(BindException e) {
+        String msg = e.getFieldErrors().stream()
+                .map(FieldError::getDefaultMessage)
+                .collect(Collectors.joining("; "));
+        return badRequest(msg);
+    }
+
+    /** @RequestParam 等参数上的约束校验失败 */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<Result<Void>> handleConstraintViolation(ConstraintViolationException e) {
+        String msg = e.getConstraintViolations().stream()
+                .map(ConstraintViolation::getMessage)
+                .collect(Collectors.joining("; "));
+        return badRequest(msg);
     }
 
     @ExceptionHandler(MissingServletRequestParameterException.class)

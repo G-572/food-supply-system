@@ -6,6 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
@@ -81,6 +83,20 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Result<Void>> handleMethodNotSupported(HttpRequestMethodNotSupportedException e) {
         return ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED)
                 .body(Result.fail(405, "请求方法不支持: " + e.getMethod()));
+    }
+
+    /** 无权限，RBAC 校验不通过时返回 403 */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<Result<Void>> handleAccessDenied(AccessDeniedException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(Result.fail(ResultCode.FORBIDDEN));
+    }
+
+    /** 未认证，Token 缺失、过期或已登出 */
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<Result<Void>> handleAuthentication(AuthenticationException e) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(Result.fail(ResultCode.UNAUTHORIZED));
     }
 
     /** 兜底：前端只看到一句通用提示，堆栈留在服务端日志 */

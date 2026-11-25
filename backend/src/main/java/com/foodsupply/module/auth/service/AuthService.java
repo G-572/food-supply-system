@@ -92,6 +92,30 @@ public class AuthService {
                 .build();
     }
 
+    /**
+     * 退出登录：token_version + 1，该用户此前签发的所有 Token 立刻失效。
+     * 没有 Redis，黑名单做不了，用版本号达到同样的效果。
+     */
+    @Transactional
+    public void logout(Long userId) {
+        SysUser user = userMapper.selectById(userId);
+        if (user == null) {
+            return;
+        }
+        userMapper.update(null, Wrappers.<SysUser>lambdaUpdate()
+                .eq(SysUser::getId, userId)
+                .set(SysUser::getTokenVersion, user.getTokenVersion() + 1));
+        log.info("用户退出登录: userId={}", userId);
+    }
+
+    public UserInfoVO me(Long userId) {
+        SysUser user = userMapper.selectById(userId);
+        if (user == null) {
+            throw BizException.unauthorized("用户不存在");
+        }
+        return buildUserInfo(user);
+    }
+
     private String statusHint(String status) {
         return switch (status) {
             case STATUS_PENDING -> "账号正在等待管理员审核，暂时无法登录";

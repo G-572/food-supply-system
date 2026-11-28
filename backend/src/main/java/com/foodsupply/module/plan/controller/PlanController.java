@@ -5,6 +5,7 @@ import com.foodsupply.common.Result;
 import com.foodsupply.module.plan.dto.PlanRequest;
 import com.foodsupply.module.plan.service.PlanService;
 import com.foodsupply.module.plan.vo.PlanVO;
+import com.foodsupply.module.plan.vo.SendResultVO;
 import com.foodsupply.security.CurrentUser;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -75,5 +76,13 @@ public class PlanController {
     public Result<Void> delete(@PathVariable Long id) {
         planService.delete(id, currentUser.id(), currentUser.hasAuthority(ADMIN_MARK));
         return Result.ok("已删除", null);
+    }
+
+    /** 发送即拆单，按明细商品的供货商分组生成子单 */
+    @PostMapping("/{id}/send")
+    @PreAuthorize("hasAuthority('plan:send')")
+    public Result<SendResultVO> send(@PathVariable Long id) {
+        return Result.ok("计划已发送", planService.send(id, currentUser.id(),
+                currentUser.hasAuthority(ADMIN_MARK)));
     }
 }

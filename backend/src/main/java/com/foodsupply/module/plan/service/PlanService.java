@@ -13,6 +13,12 @@ import com.foodsupply.module.plan.mapper.PurchasePlanItemMapper;
 import com.foodsupply.module.plan.mapper.PurchasePlanMapper;
 import com.foodsupply.module.plan.vo.PlanItemVO;
 import com.foodsupply.module.plan.vo.PlanVO;
+import com.foodsupply.module.plan.vo.SendResultVO;
+import com.foodsupply.module.order.entity.PurchaseOrder;
+import com.foodsupply.module.order.entity.PurchaseOrderItem;
+import com.foodsupply.module.order.mapper.PurchaseOrderItemMapper;
+import com.foodsupply.module.order.mapper.PurchaseOrderMapper;
+import com.foodsupply.module.order.vo.OrderBriefVO;
 import com.foodsupply.module.product.entity.Product;
 import com.foodsupply.module.product.mapper.ProductMapper;
 import com.foodsupply.module.rbac.entity.SysUser;
@@ -26,9 +32,12 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,10 +51,14 @@ public class PlanService {
 
     private static final int MAX_PAGE_SIZE = 100;
     private static final String STATUS_DRAFT = "DRAFT";
+    private static final String STATUS_SENT = "SENT";
+    private static final String STATUS_PENDING_CONFIRM = "PENDING_CONFIRM";
     private static final String STATUS_ON_SALE = "ON_SALE";
 
     private final PurchasePlanMapper planMapper;
     private final PurchasePlanItemMapper planItemMapper;
+    private final PurchaseOrderMapper orderMapper;
+    private final PurchaseOrderItemMapper orderItemMapper;
     private final ProductMapper productMapper;
     private final SupplierMapper supplierMapper;
     private final SysUserMapper userMapper;
@@ -75,6 +88,113 @@ public class PlanService {
     public PlanVO get(Long id, Long currentUserId, boolean admin) {
         PurchasePlan plan = requirePlan(id, currentUserId, admin);
         return toVOList(List.of(plan), true).get(0);
+    }
+
+    /**
+     * 发送计划并拆单。按明细商品的所属供货商分组，一组生成一张子单，
+     * 名称、单位、单价在这里快照进子单明细，之后供货商改价不影响已发出的单。
+     * 整个动作一个事务，中途任何一张单失败都整体回滚。
+     */
+    @Transactional
+    public SendResultVO send(Long id, Long currentUserId, boolean admin) {
+        PurchasePlan plan = requirePlan(id, currentUserId, admin);
+        if (!STATUS_DRAFT.equals(plan.getStatus())) {
+            throw BizException.conflict("计划已发送，不能重复发送");
+        }
+
+        List<PurchasePlanItem> items = planItemMapper.selectList(
+                Wrappers.<PurchasePlanItem>lambdaQuery()
+                        .eq(PurchasePlanItem::getPlanId, id)
+                        .orderByAsc(PurchasePlanItem::getId));
+        if (items.isEmpty()) {
+            throw BizException.badRequest("计划没有明细，不能发送");
+        }
+
+        Map<Long, Product> products = loadProductsByIds(
+                items.stream().map(PurchasePlanItem::getProductId).toList());
+
+        // 用 LinkedHashMap 保住明细顺序，拆出来的单子顺序稳定，前端好展示
+        Map<Long, List<PurchasePlanItem>> grouped = new LinkedHashMap<>();
+        for (PurchasePlanItem item : items) {
+            Long supplierId = products.get(item.getProductId()).getSupplierId();
+            grouped.computeIfAbsent(supplierId, k -> new ArrayList<>()).add(item);
+        }
+
+        String date = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+        int seq = todayOrderCount(date);
+        BigDecimal total = BigDecimal.ZERO;
+        List<OrderBriefVO> orders = new ArrayList<>();
+
+        for (Map.Entry<Long, List<PurchasePlanItem>> entry : grouped.entrySet()) {
+            PurchaseOrder order = buildOrder(entry.getKey(), id, date, ++seq);
+            BigDecimal orderTotal = BigDecimal.ZERO;
+
+            for (PurchasePlanItem item : entry.getValue()) {
+                Product product = products.get(item.getProductId());
+                BigDecimal subtotal = product.getPrice().multiply(item.getQuantity());
+                orderTotal = orderTotal.add(subtotal);
+
+                PurchaseOrderItem orderItem = new PurchaseOrderItem();
+                orderItem.setOrderId(order.getId());
+                orderItem.setProductId(product.getId());
+                orderItem.setProductName(product.getName());
+                orderItem.setUnit(product.getUnit());
+                orderItem.setQuantity(item.getQuantity());
+                orderItem.setUnitPrice(product.getPrice());
+                orderItem.setSubtotal(subtotal.setScale(2, RoundingMode.HALF_UP));
+                orderItemMapper.insert(orderItem);
+            }
+
+            orderTotal = orderTotal.setScale(2, RoundingMode.HALF_UP);
+            order.setTotalAmount(orderTotal);
+            orderMapper.updateById(order);
+            total = total.add(orderTotal);
+
+            OrderBriefVO brief = new OrderBriefVO();
+            brief.setId(order.getId());
+            brief.setOrderNo(order.getOrderNo());
+            brief.setSupplierId(order.getSupplierId());
+            brief.setTotalAmount(orderTotal);
+            brief.setItemCount(entry.getValue().size());
+            orders.add(brief);
+        }
+
+        // 供货商名字统一补一次，别在循环里查
+        Map<Long, String> supplierNames = supplierMapper.selectBatchIds(grouped.keySet()).stream()
+                .collect(Collectors.toMap(Supplier::getId, Supplier::getName));
+        orders.forEach(o -> o.setSupplierName(supplierNames.get(o.getSupplierId())));
+
+        planMapper.update(null, Wrappers.<PurchasePlan>lambdaUpdate()
+                .eq(PurchasePlan::getId, id)
+                .set(PurchasePlan::getStatus, STATUS_SENT));
+
+        log.info("计划已发送: no={}, 拆成 {} 张单, 合计 {}", plan.getPlanNo(), orders.size(), total);
+
+        SendResultVO result = new SendResultVO();
+        result.setPlanId(id);
+        result.setPlanNo(plan.getPlanNo());
+        result.setOrderCount(orders.size());
+        result.setTotalAmount(total);
+        result.setOrders(orders);
+        return result;
+    }
+
+    private PurchaseOrder buildOrder(Long supplierId, Long planId, String date, int seq) {
+        PurchaseOrder order = new PurchaseOrder();
+        order.setOrderNo("SO" + date + String.format("%03d", seq));
+        order.setPlanId(planId);
+        order.setSupplierId(supplierId);
+        order.setStatus(STATUS_PENDING_CONFIRM);
+        order.setTotalAmount(BigDecimal.ZERO);
+        orderMapper.insert(order);
+        return order;
+    }
+
+    /** 当天已生成的子单数，用作流水起点 */
+    private int todayOrderCount(String date) {
+        Long count = orderMapper.selectCount(Wrappers.<PurchaseOrder>lambdaQuery()
+                .likeRight(PurchaseOrder::getOrderNo, "SO" + date));
+        return count == null ? 0 : count.intValue();
     }
 
     @Transactional
@@ -159,14 +279,18 @@ public class PlanService {
 
     /** 一次把涉及的商品取出来，同时校验存在与在售状态 */
     private Map<Long, Product> loadProducts(List<PlanItemRequest> items) {
-        List<Long> productIds = items.stream().map(PlanItemRequest::getProductId).toList();
-        Map<Long, Product> products = productMapper.selectBatchIds(productIds).stream()
+        return loadProductsByIds(items.stream().map(PlanItemRequest::getProductId).toList());
+    }
+
+    private Map<Long, Product> loadProductsByIds(List<Long> productIds) {
+        List<Long> distinctIds = productIds.stream().distinct().toList();
+        Map<Long, Product> products = productMapper.selectBatchIds(distinctIds).stream()
                 .collect(Collectors.toMap(Product::getId, Function.identity()));
 
-        for (PlanItemRequest item : items) {
-            Product product = products.get(item.getProductId());
+        for (Long productId : distinctIds) {
+            Product product = products.get(productId);
             if (product == null) {
-                throw BizException.badRequest("商品不存在: " + item.getProductId());
+                throw BizException.badRequest("商品不存在: " + productId);
             }
             if (!STATUS_ON_SALE.equals(product.getStatus())) {
                 throw BizException.badRequest("商品已下架: " + product.getName());

@@ -8,6 +8,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS purchase_order_item;
 DROP TABLE IF EXISTS purchase_order;
+DROP TABLE IF EXISTS purchase_plan_item;
 DROP TABLE IF EXISTS purchase_plan;
 DROP TABLE IF EXISTS product;
 DROP TABLE IF EXISTS sys_role_permission;
@@ -140,6 +141,20 @@ CREATE TABLE purchase_plan (
     KEY idx_plan_date (plan_date),
     CONSTRAINT fk_plan_purchaser FOREIGN KEY (purchaser_id) REFERENCES sys_user (id)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '采购计划表';
+
+-- 计划明细。草稿阶段就一行一个商品，发送时按商品归属的供货商分组搬到子单明细
+CREATE TABLE purchase_plan_item (
+    id         BIGINT         NOT NULL AUTO_INCREMENT,
+    plan_id    BIGINT         NOT NULL,
+    product_id BIGINT         NOT NULL,
+    quantity   DECIMAL(12, 2) NOT NULL,
+    created_at DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    KEY idx_plan_item_plan (plan_id),
+    KEY idx_plan_item_product (product_id),
+    CONSTRAINT fk_plan_item_plan FOREIGN KEY (plan_id) REFERENCES purchase_plan (id) ON DELETE CASCADE,
+    CONSTRAINT fk_plan_item_product FOREIGN KEY (product_id) REFERENCES product (id)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT '采购计划明细表';
 
 -- 子单。发送计划时按供货商拆出来，一单只对一家供货商
 CREATE TABLE purchase_order (

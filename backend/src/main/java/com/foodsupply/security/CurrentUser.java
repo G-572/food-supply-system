@@ -27,4 +27,17 @@ public class CurrentUser {
     public Long supplierId() {
         return get().supplierId();
     }
+
+    /**
+     * 当前用户有没有某个权限码。用在"管理员和采购员权限码重合、
+     * 但数据范围不同"的地方，比如计划列表管理员能看全部。
+     */
+    public boolean hasAuthority(String code) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null) {
+            return false;
+        }
+        return authentication.getAuthorities().stream()
+                .anyMatch(a -> code.equals(a.getAuthority()));
+    }
 }
